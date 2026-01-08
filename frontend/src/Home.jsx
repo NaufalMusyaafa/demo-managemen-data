@@ -151,6 +151,7 @@ function Home({ theme, selectedUploadId }) {
           onCellValueChanged={onCellValueChanged}
           pagination={true}
           paginationPageSize={10}
+          paginationPageSizeSelector={[10, 20, 50, 100, 1000]}
         />
       </div>
     </div>
