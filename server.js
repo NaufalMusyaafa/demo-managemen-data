@@ -55,21 +55,114 @@ app.get('/api/uploads', async (req, res) => {
     }
 });
 
+// PUT /api/uploads/:id - Update nama file upload
+app.put('/api/uploads/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { filename } = req.body;
+
+        if (!filename || filename.trim() === '') {
+             return res.status(400).json({
+                success: false,
+                message: 'Filename tidak boleh kosong'
+            });
+        }
+
+        const [result] = await pool.query('UPDATE uploads SET filename = ? WHERE id = ?', [filename, id]);
+
+        if (result.affectedRows === 0) {
+             return res.status(404).json({
+                success: false,
+                message: 'Upload tidak ditemukan'
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Filename berhasil diupdate'
+        });
+    } catch (error) {
+        console.error('Error updating upload filename:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Gagal mengupdate filename',
+            error: error.message
+        });
+    }
+});
+
+// DELETE /api/uploads/:id - Hapus history upload dan tabel terkait
+app.delete('/api/uploads/:id', async (req, res) => {
+    const connection = await pool.getConnection();
+    try {
+        const { id } = req.params;
+
+        // 1. Get info upload untuk dapat nama tabel
+        const [upload] = await connection.query('SELECT table_name FROM uploads WHERE id = ?', [id]);
+        
+        if (upload.length === 0) {
+             return res.status(404).json({
+                success: false,
+                message: 'Upload tidak ditemukan'
+            });
+        }
+
+        const tableName = upload[0].table_name;
+
+        // 2. Drop table dinamis
+        if (tableName) {
+            await connection.query(`DROP TABLE IF EXISTS ${tableName}`);
+        }
+
+        // 3. Hapus dari tabel uploads
+        await connection.query('DELETE FROM uploads WHERE id = ?', [id]);
+
+        res.json({
+            success: true,
+            message: 'Data upload dan tabel berhasil dihapus'
+        });
+
+    } catch (error) {
+        console.error('Error deleting upload:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Gagal menghapus upload',
+            error: error.message
+        });
+    } finally {
+        connection.release();
+    }
+});
+
 // GET /api/products - Mengambil semua data produk (support filtering by upload_id)
 app.get('/api/products', async (req, res) => {
     try {
         const { upload_id } = req.query;
         let query = 'SELECT * FROM products';
         let params = [];
+        let targetTable = 'products';
 
         if (upload_id) {
-            query += ' WHERE upload_id = ?';
-            params.push(upload_id);
+            // Get table name for this upload
+            const [upload] = await pool.query('SELECT table_name FROM uploads WHERE id = ?', [upload_id]);
+            if (upload.length > 0 && upload[0].table_name) {
+                targetTable = upload[0].table_name;
+                query = `SELECT * FROM ${targetTable}`; // Using template literal for table name (internal trusted source)
+            } else {
+                 return res.json({
+                    success: true,
+                    message: 'Upload not found or no table associated',
+                    data: []
+                });
+            }
         }
 
-        query += ' ORDER BY created_at DESC';
+        query += ' ORDER BY id DESC'; // Assuming id exists in dynamic tables too
 
         const [rows] = await pool.query(query, params);
+        // Add upload_id to each row if it doesn't have it (dynamic tables might not store it per row if table IS the group)
+        // But for frontend consistency, let's keep it clean.
+        
         res.json({
             success: true,
             message: 'Data produk berhasil diambil',
@@ -88,7 +181,7 @@ app.get('/api/products', async (req, res) => {
 // POST /api/products - Menambah satu data produk manual
 app.post('/api/products', async (req, res) => {
     try {
-        const { product_code, product_name, category, price, stock } = req.body;
+        const { product_code, product_name, category, price, stock, upload_id } = req.body;
 
         // Validasi input
         if (!product_code || !product_name) {
@@ -98,8 +191,16 @@ app.post('/api/products', async (req, res) => {
             });
         }
 
+        let targetTable = 'products';
+        if (upload_id) {
+             const [upload] = await pool.query('SELECT table_name FROM uploads WHERE id = ?', [upload_id]);
+             if (upload.length > 0 && upload[0].table_name) {
+                 targetTable = upload[0].table_name;
+             }
+        }
+
         const [result] = await pool.query(
-            `INSERT INTO products (product_code, product_name, category, price, stock) 
+            `INSERT INTO ${targetTable} (product_code, product_name, category, price, stock) 
              VALUES (?, ?, ?, ?, ?)`,
             [product_code, product_name, category || null, price || 0, stock || 0]
         );
@@ -139,10 +240,18 @@ app.post('/api/products', async (req, res) => {
 app.put('/api/products/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { product_code, product_name, category, price, stock } = req.body;
+        const { product_code, product_name, category, price, stock, upload_id } = req.body;
+
+        let targetTable = 'products';
+        if (upload_id) {
+             const [upload] = await pool.query('SELECT table_name FROM uploads WHERE id = ?', [upload_id]);
+             if (upload.length > 0 && upload[0].table_name) {
+                 targetTable = upload[0].table_name;
+             }
+        }
 
         // Cek apakah produk ada
-        const [existing] = await pool.query('SELECT * FROM products WHERE id = ?', [id]);
+        const [existing] = await pool.query(`SELECT * FROM ${targetTable} WHERE id = ?`, [id]);
         if (existing.length === 0) {
             return res.status(404).json({
                 success: false,
@@ -183,12 +292,12 @@ app.put('/api/products/:id', async (req, res) => {
         }
 
         values.push(id);
-        const query = `UPDATE products SET ${updates.join(', ')} WHERE id = ?`;
+        const query = `UPDATE ${targetTable} SET ${updates.join(', ')} WHERE id = ?`;
         
         await pool.query(query, values);
 
         // Ambil data terbaru
-        const [updated] = await pool.query('SELECT * FROM products WHERE id = ?', [id]);
+        const [updated] = await pool.query(`SELECT * FROM ${targetTable} WHERE id = ?`, [id]);
 
         res.json({
             success: true,
@@ -218,9 +327,18 @@ app.put('/api/products/:id', async (req, res) => {
 app.delete('/api/products/:id', async (req, res) => {
     try {
         const { id } = req.params;
+        const { upload_id } = req.query; // Expect upload_id in query for delete
+
+        let targetTable = 'products';
+        if (upload_id) {
+             const [upload] = await pool.query('SELECT table_name FROM uploads WHERE id = ?', [upload_id]);
+             if (upload.length > 0 && upload[0].table_name) {
+                 targetTable = upload[0].table_name;
+             }
+        }
 
         // Cek apakah produk ada
-        const [existing] = await pool.query('SELECT * FROM products WHERE id = ?', [id]);
+        const [existing] = await pool.query(`SELECT * FROM ${targetTable} WHERE id = ?`, [id]);
         if (existing.length === 0) {
             return res.status(404).json({
                 success: false,
@@ -228,7 +346,7 @@ app.delete('/api/products/:id', async (req, res) => {
             });
         }
 
-        await pool.query('DELETE FROM products WHERE id = ?', [id]);
+        await pool.query(`DELETE FROM ${targetTable} WHERE id = ?`, [id]);
 
         res.json({
             success: true,
@@ -249,6 +367,9 @@ app.delete('/api/products/:id', async (req, res) => {
 app.post('/api/upload', upload.single('file'), async (req, res) => {
     // Dapatkan koneksi untuk transaction
     const connection = await pool.getConnection();
+
+    let newTableName = '';
+    let uploadId = null;
 
     try {
         // Validasi file
@@ -329,26 +450,54 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
         // ========================
         // TRANSACTION: All or Nothing
         // ========================
+        // Note on MySQL DDL and transactions: CREATE TABLE causes an implicit commit.
+        // To ensure "all or nothing", we'll insert into `uploads` first, then create the table,
+        // then begin a transaction for the bulk inserts. If bulk inserts fail, we'll manually
+        // drop the table and delete the `uploads` record.
+
+        // 1. Simpan record ke tabel uploads (this will be committed immediately)
+        const [uploadResult] = await connection.query(
+            `INSERT INTO uploads (filename, total_rows) VALUES (?, ?)`,
+            [req.file.originalname, jsonData.length]
+        );
+        uploadId = uploadResult.insertId;
+        newTableName = `products_upload_${uploadId}`;
+
+        // 2. Create Dynamic Table (this will also be committed immediately)
+        await connection.query(
+            `CREATE TABLE ${newTableName} (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                product_code VARCHAR(255) NOT NULL,
+                product_name VARCHAR(255) NOT NULL,
+                category VARCHAR(255),
+                price DECIMAL(10, 2) DEFAULT 0,
+                stock INT DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY unique_product_code (product_code)
+            )`
+        );
+
+        // 3. Update uploads table with table_name (this will be committed immediately)
+        await connection.query(
+            `UPDATE uploads SET table_name = ? WHERE id = ?`,
+            [newTableName, uploadId]
+        );
+
+        // Now, begin a transaction for the actual data inserts
         await connection.beginTransaction();
 
+        let insertedCount = 0;
+
         try {
-            // 1. Simpan record ke tabel uploads
-            const [uploadResult] = await connection.query(
-                `INSERT INTO uploads (filename, total_rows) VALUES (?, ?)`,
-                [req.file.originalname, jsonData.length]
-            );
-            const uploadId = uploadResult.insertId;
-
-            let insertedCount = 0;
-
-            // 2. Simpan produk dengan upload_id
+            // 4. Simpan produk ke tabel dinamis baru
             for (let i = 0; i < products.length; i++) {
                 const product = products[i];
                 
                 await connection.query(
-                    `INSERT INTO products (product_code, product_name, category, price, stock, upload_id) 
-                     VALUES (?, ?, ?, ?, ?, ?)`,
-                    [product.product_code, product.product_name, product.category, product.price, product.stock, uploadId]
+                    `INSERT INTO ${newTableName} (product_code, product_name, category, price, stock) 
+                     VALUES (?, ?, ?, ?, ?)`,
+                    [product.product_code, product.product_name, product.category, product.price, product.stock]
                 );
                 insertedCount++;
             }
@@ -358,45 +507,68 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
 
             res.status(201).json({
                 success: true,
-                message: `Berhasil mengupload ${insertedCount} produk dari file Excel`,
+                message: `Berhasil mengupload ${insertedCount} produk. Disimpan di tabel baru: ${newTableName}`,
                 data: {
                     filename: req.file.originalname,
                     totalRows: jsonData.length,
-                    insertedRows: insertedCount
+                    insertedRows: insertedCount,
+                    uploadId: uploadId
                 }
             });
 
         } catch (insertError) {
-            // Jika ada error saat insert, ROLLBACK semua
+            // If there's an error during data insertion, ROLLBACK the inserts
             await connection.rollback();
 
-            console.error('Transaction rollback:', insertError);
+            console.error('Transaction rollback (data insertion failed):', insertError);
+
+            // Cleanup: Drop the created table and delete the upload record
+            try {
+                if (newTableName) {
+                    await connection.query(`DROP TABLE IF EXISTS ${newTableName}`);
+                }
+                if (uploadId) {
+                    await connection.query(`DELETE FROM uploads WHERE id = ?`, [uploadId]);
+                }
+            } catch (cleanupError) {
+                console.error('Cleanup failed after data insertion error:', cleanupError);
+            }
 
             // Handle duplicate entry error
             if (insertError.code === 'ER_DUP_ENTRY') {
-                // Extract product_code from error message
                 const match = insertError.message.match(/Duplicate entry '(.+?)'/);
                 const duplicateValue = match ? match[1] : 'unknown';
 
                 return res.status(409).json({
                     success: false,
-                    message: `Upload dibatalkan (ROLLBACK). Product code '${duplicateValue}' sudah ada dalam database.`,
-                    error: 'Tidak ada data yang disimpan karena terdapat duplikat.'
+                    message: `Upload dibatalkan. Product code '${duplicateValue}' duplikat.`,
+                    error: 'Tidak ada data yang disimpan.'
                 });
             }
 
             return res.status(500).json({
                 success: false,
-                message: 'Upload dibatalkan (ROLLBACK). Terjadi error saat menyimpan data.',
+                message: 'Upload dibatalkan. Terjadi error saat menyimpan data.',
                 error: insertError.message
             });
         }
 
     } catch (error) {
-        // Rollback jika ada error di luar transaction
-        await connection.rollback();
+        // This catch block handles errors before or during DDL operations (e.g., file read, validation, CREATE TABLE)
+        console.error('Error uploading file or creating table:', error);
+
+        // Attempt cleanup if table was created but something else failed
+        try {
+            if (newTableName) {
+                await connection.query(`DROP TABLE IF EXISTS ${newTableName}`);
+            }
+            if (uploadId) {
+                await connection.query(`DELETE FROM uploads WHERE id = ?`, [uploadId]);
+            }
+        } catch (cleanupError) {
+            console.error('Cleanup failed after initial upload/table creation error:', cleanupError);
+        }
         
-        console.error('Error uploading file:', error);
         res.status(500).json({
             success: false,
             message: 'Gagal memproses file Excel',

@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { AgGridReact } from 'ag-grid-react';
@@ -11,12 +10,55 @@ import { AllCommunityModule } from 'ag-grid-community';
 // Register all Community features
 ModuleRegistry.registerModules([AllCommunityModule]);
 
-function Home({ theme, selectedUploadId }) {
+function Home({ theme, selectedUploadId, selectedUpload, refreshUploads, onSelectUpload }) {
   const [products, setProducts] = useState([]);
   const location = useLocation();
   const navigate = useNavigate();
   const [successMsg, setSuccessMsg] = useState(null);
   const [errorMsg, setErrorMsg] = useState(null);
+
+  // Rename state
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [editName, setEditName] = useState('');
+
+  useEffect(() => {
+    if (selectedUpload) {
+      setEditName(selectedUpload.filename);
+    }
+  }, [selectedUpload]);
+
+  const handleUpdateName = async () => {
+    if (!editName.trim()) return;
+    try {
+      await axios.put(`http://localhost:3000/api/uploads/${selectedUploadId}`, {
+        filename: editName
+      });
+      setIsEditingName(false);
+      refreshUploads(); // Refresh app state
+      setSuccessMsg('Nama database berhasil diupdate');
+      setTimeout(() => setSuccessMsg(null), 3000);
+    } catch (err) {
+      console.error(err);
+      alert('Gagal mengupdate nama: ' + (err.response?.data?.message || err.message));
+    }
+  };
+
+  const handleDeleteTable = async () => {
+    if (!window.confirm(`Yakin ingin menghapus tabel "${selectedUpload?.filename}" beserta semua isinya? Tindakan ini tidak dapat dibatalkan.`)) {
+        return;
+    }
+
+    try {
+        await axios.delete(`http://localhost:3000/api/uploads/${selectedUploadId}`);
+        refreshUploads(); // Refresh sidebar list
+        onSelectUpload(null); // Reset selection to All Data
+        setSuccessMsg('Tabel berhasil dihapus');
+        setTimeout(() => setSuccessMsg(null), 3000);
+    } catch (err) {
+        console.error(err);
+        alert('Gagal menghapus tabel: ' + (err.response?.data?.message || err.message));
+    }
+  };
 
   useEffect(() => {
     // Check for message from Upload page
@@ -93,15 +135,18 @@ function Home({ theme, selectedUploadId }) {
     const { data } = event;
     try {
       await axios.put(`http://localhost:3000/api/products/${data.id}`, {
+        product_code: data.product_code,
         product_name: data.product_name,
         category: data.category,
         price: data.price,
-        stock: data.stock
+        stock: data.stock,
+        upload_id: selectedUploadId // Pass context for dynamic table
       });
       console.log('Update success for ID:', data.id);
     } catch (err) {
       console.error(err);
       alert('Gagal mengupdate produk: ' + (err.response?.data?.message || err.message));
+      // Revert change locally if needed, or just refetch
       fetchProducts();
     }
   };
@@ -109,7 +154,12 @@ function Home({ theme, selectedUploadId }) {
   const handleDelete = async (id) => {
     if (!window.confirm('Yakin ingin menghapus produk ini?')) return;
     try {
-      await axios.delete(`http://localhost:3000/api/products/${id}`);
+      let url = `http://localhost:3000/api/products/${id}`;
+      if (selectedUploadId) {
+        url += `?upload_id=${selectedUploadId}`;
+      }
+      
+      await axios.delete(url);
       fetchProducts();
     } catch (err) {
       console.error(err);
@@ -124,12 +174,53 @@ function Home({ theme, selectedUploadId }) {
     <div className="page-container">
       <div className="page-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-             <h2>{selectedUploadId ? 'Data Filtered' : 'Semua Data Produk'}</h2>
-             {selectedUploadId && <span className="badge">Filtered</span>}
+             {/* Header Logic: Show filename or 'Semua Data Produk' */}
+             {!selectedUploadId ? (
+                <h2>Semua Data Produk</h2>
+             ) : (
+                <div className="editable-header" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  {isEditingName ? (
+                    <>
+                      <input 
+                        type="text" 
+                        value={editName} 
+                        onChange={(e) => setEditName(e.target.value)}
+                        className="header-input"
+                        style={{ fontSize: '1.5rem', padding: '5px' }}
+                      />
+                      <button onClick={handleUpdateName} className="btn-small">💾</button>
+                      <button onClick={() => setIsEditingName(false)} className="btn-small cancel">❌</button>
+                    </>
+                  ) : (
+                    <>
+                      <h2>{selectedUpload ? selectedUpload.filename : 'Data Upload'}</h2>
+                      <button 
+                        onClick={() => setIsEditingName(true)} 
+                        className="btn-icon"
+                        title="Ubah nama"
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem' }}
+                      >
+                        ✏️
+                      </button>
+                    </>
+                  )}
+                </div>
+             )}
         </div>
-        <Link to="/upload" className="btn-primary">
-          + Upload Excel
-        </Link>
+        <div style={{ display: 'flex', gap: '10px' }}>
+            {selectedUploadId && (
+                <button 
+                    onClick={handleDeleteTable} 
+                    className="btn-danger"
+                    style={{ backgroundColor: '#ff4d4f', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
+                >
+                    🗑️ Hapus Tabel
+                </button>
+            )}
+            <Link to="/upload" className="btn-primary">
+              + Upload Excel
+            </Link>
+        </div>
       </div>
 
       {successMsg && (

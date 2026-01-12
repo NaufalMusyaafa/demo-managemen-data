@@ -1,6 +1,6 @@
-
 import { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
+import axios from 'axios';
 import Home from './Home';
 import UploadProduct from './UploadProduct';
 import Sidebar from './Sidebar';
@@ -11,8 +11,29 @@ function App() {
     return localStorage.getItem('app-theme') || 'light';
   });
 
+  const [uploads, setUploads] = useState([]);
   const [selectedUploadId, setSelectedUploadId] = useState(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+
+  // Derived state for selected upload object
+  const selectedUpload = uploads.find(u => u.id === selectedUploadId) || null;
+
+  const fetchUploads = async () => {
+    try {
+      const res = await axios.get('http://localhost:3000/api/uploads');
+      if (res.data.success) {
+        setUploads(res.data.data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch uploads:', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchUploads();
+    const interval = setInterval(fetchUploads, 10000);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -34,7 +55,8 @@ function App() {
           isOpen={isSidebarOpen} 
           toggleSidebar={toggleSidebar}
           selectedUploadId={selectedUploadId} 
-          onSelectUpload={setSelectedUploadId} 
+          onSelectUpload={setSelectedUploadId}
+          uploads={uploads} // Pass data
         />
         
         <div className="main-content">
@@ -55,7 +77,15 @@ function App() {
         
           <main className="content-area">
             <Routes>
-              <Route path="/" element={<Home theme={theme} selectedUploadId={selectedUploadId} />} />
+              <Route path="/" element={
+                 <Home 
+                   theme={theme} 
+                   selectedUploadId={selectedUploadId} 
+                   selectedUpload={selectedUpload}
+                   refreshUploads={fetchUploads}
+                   onSelectUpload={setSelectedUploadId}
+                 />
+              } />
               <Route path="/upload" element={<UploadProduct />} />
             </Routes>
           </main>
