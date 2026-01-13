@@ -51,7 +51,7 @@ function Home({ theme, selectedUploadId, selectedUpload, refreshUploads, onSelec
     try {
         await axios.delete(`http://localhost:3000/api/uploads/${selectedUploadId}`);
         refreshUploads(); // Refresh sidebar list
-        onSelectUpload(null); // Reset selection to All Data
+        onSelectUpload(null); // Reset selection to All Data (goes to empty state)
         setSuccessMsg('Tabel berhasil dihapus');
         setTimeout(() => setSuccessMsg(null), 3000);
     } catch (err) {
@@ -64,10 +64,19 @@ function Home({ theme, selectedUploadId, selectedUpload, refreshUploads, onSelec
     // Check for message from Upload page
     if (location.state?.successMessage) {
       setSuccessMsg(location.state.successMessage);
+      
+      // Auto-select uploaded table if available
+      if (location.state?.stats?.uploadId) {
+          console.log("Auto-selecting upload:", location.state.stats.uploadId);
+          onSelectUpload(location.state.stats.uploadId);
+      }
+      
+      // Clear history state to avoid re-processing on refresh
       window.history.replaceState({}, document.title);
+      
       setTimeout(() => setSuccessMsg(null), 5000);
     }
-  }, [location]);
+  }, [location, onSelectUpload]);
 
   const [colDefs] = useState([
     { field: 'product_code', headerName: 'Product Code', sortable: true, filter: true },
@@ -111,12 +120,11 @@ function Home({ theme, selectedUploadId, selectedUpload, refreshUploads, onSelec
   ]);
 
   const fetchProducts = async () => {
-    try {
-      let url = 'http://localhost:3000/api/products';
-      if (selectedUploadId) {
-        url += `?upload_id=${selectedUploadId}`;
-      }
+    // If no upload selected, we don't fetch anything in this new mode
+    if (!selectedUploadId) return;
 
+    try {
+      let url = `http://localhost:3000/api/products?upload_id=${selectedUploadId}`;
       const res = await axios.get(url);
       if (res.data.success) {
         setProducts(res.data.data);
@@ -154,11 +162,7 @@ function Home({ theme, selectedUploadId, selectedUpload, refreshUploads, onSelec
   const handleDelete = async (id) => {
     if (!window.confirm('Yakin ingin menghapus produk ini?')) return;
     try {
-      let url = `http://localhost:3000/api/products/${id}`;
-      if (selectedUploadId) {
-        url += `?upload_id=${selectedUploadId}`;
-      }
-      
+      let url = `http://localhost:3000/api/products/${id}?upload_id=${selectedUploadId}`;
       await axios.delete(url);
       fetchProducts();
     } catch (err) {
@@ -170,15 +174,42 @@ function Home({ theme, selectedUploadId, selectedUpload, refreshUploads, onSelec
   // Determine Grid Theme class based on current App Theme
   const gridThemeClass = theme === 'dark' ? 'ag-theme-quartz-dark' : 'ag-theme-quartz';
 
+  // --- EMPTY STATE VIEW (No Upload Selected) ---
+  if (!selectedUploadId) {
+      return (
+        <div className="page-container" style={{ textAlign: 'center', paddingTop: '5rem' }}>
+             {successMsg && (
+                <div className="success-banner" style={{ marginBottom: '2rem', maxWidth: '600px', margin: '0 auto 2rem' }}>
+                <span>✅</span> {successMsg}
+                </div>
+            )}
+            
+            <div className="empty-state-card" style={{ 
+                padding: '3rem', 
+                backgroundColor: 'var(--bg-secondary)', 
+                borderRadius: '12px', 
+                maxWidth: '500px', 
+                margin: '0 auto',
+                boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
+            }}>
+                <h2 style={{ marginBottom: '1rem' }}>Selamat Datang</h2>
+                <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem' }}>
+                    Silakan pilih data dari sidebar riwayat upload<br/>atau upload file Excel baru untuk mulai.
+                </p>
+                <Link to="/upload" className="btn-primary" style={{ display: 'inline-block' }}>
+                    + Upload Excel Baru
+                </Link>
+            </div>
+        </div>
+      );
+  }
+
+  // --- EXISTING FULL VIEW (With Table) ---
   return (
     <div className="page-container">
       <div className="page-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-             {/* Header Logic: Show filename or 'Semua Data Produk' */}
-             {!selectedUploadId ? (
-                <h2>Semua Data Produk</h2>
-             ) : (
-                <div className="editable-header" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+             <div className="editable-header" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   {isEditingName ? (
                     <>
                       <input 
@@ -204,19 +235,16 @@ function Home({ theme, selectedUploadId, selectedUpload, refreshUploads, onSelec
                       </button>
                     </>
                   )}
-                </div>
-             )}
+             </div>
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
-            {selectedUploadId && (
-                <button 
-                    onClick={handleDeleteTable} 
-                    className="btn-danger"
-                    style={{ backgroundColor: '#ff4d4f', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
-                >
-                    🗑️ Hapus Tabel
-                </button>
-            )}
+            <button 
+                onClick={handleDeleteTable} 
+                className="btn-danger"
+                style={{ backgroundColor: '#ff4d4f', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
+            >
+                🗑️ Hapus Tabel
+            </button>
             <Link to="/upload" className="btn-primary">
               + Upload Excel
             </Link>

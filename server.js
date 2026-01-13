@@ -4,6 +4,7 @@ const bodyParser = require('body-parser');
 const multer = require('multer');
 const XLSX = require('xlsx');
 const pool = require('./config/db');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
@@ -456,9 +457,12 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
         // drop the table and delete the `uploads` record.
 
         // 1. Simpan record ke tabel uploads (this will be committed immediately)
+        // Gunakan nama file tanpa ekstensi untuk judul tabel
+        const filenameWithoutExt = path.parse(req.file.originalname).name;
+        
         const [uploadResult] = await connection.query(
             `INSERT INTO uploads (filename, total_rows) VALUES (?, ?)`,
-            [req.file.originalname, jsonData.length]
+            [filenameWithoutExt, jsonData.length]
         );
         uploadId = uploadResult.insertId;
         newTableName = `products_upload_${uploadId}`;
